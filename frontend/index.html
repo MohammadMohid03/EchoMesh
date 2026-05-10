@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="EchoMesh — Real-time peer-to-peer collaborative workspace" />
+  <title>EchoMesh</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="app">
+    <!-- Offline banner -->
+    <div id="offline-banner" class="hidden">
+      <span>📡 You are offline — changes are saved locally and will sync when you reconnect</span>
+    </div>
+
+    <!-- Header -->
+    <header id="header">
+      <div class="brand">
+        <span class="logo">◈</span>
+        <h1>EchoMesh</h1>
+      </div>
+      <div class="header-right">
+        <div class="peer-count-badge">
+          <span class="count-dot"></span>
+          <span id="peer-count">0</span> peers
+        </div>
+        <div class="id-badge">
+          <span class="label">You</span>
+          <span id="peer-id" class="mono">—</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main layout -->
+    <div id="layout">
+      <!-- Sidebar -->
+      <aside id="sidebar">
+        <section class="card" id="room-card">
+          <h2>Join a Room</h2>
+          <div class="row">
+            <label class="input-label" for="name-input">Your name</label>
+            <input id="name-input" type="text" placeholder="Anonymous" spellcheck="false" />
+          </div>
+          <div class="row">
+            <label class="input-label" for="room-input">Room name</label>
+            <input id="room-input" type="text" placeholder="my-room" spellcheck="false" />
+          </div>
+          <div class="row btn-row">
+            <button id="join-btn" class="btn primary">Join</button>
+            <button id="leave-btn" class="btn danger" disabled>Leave</button>
+          </div>
+          <div id="status" class="status-badge off">Not connected</div>
+        </section>
+
+        <section class="card" id="history-card">
+          <h2>Recent Rooms</h2>
+          <div id="room-history"><div class="empty">No recent rooms</div></div>
+        </section>
+
+        <section class="card" id="peers-card">
+          <h2>Connected Peers</h2>
+          <div id="peer-list"><div class="empty">Waiting for peers…</div></div>
+        </section>
+
+        <!-- Export section -->
+        <section class="card" id="export-card">
+          <h2>Export</h2>
+          <div class="export-btns">
+            <button id="export-pdf" class="btn-sm" title="Export document as PDF">📄 PDF</button>
+            <button id="export-md" class="btn-sm" title="Export as Markdown">📝 MD</button>
+            <button id="export-txt" class="btn-sm" title="Export as plain text">📃 TXT</button>
+            <button id="export-png" class="btn-sm" title="Export whiteboard as PNG">🖼️ PNG</button>
+          </div>
+        </section>
+      </aside>
+
+      <!-- Main content area -->
+      <div id="content">
+        <!-- Tab bar -->
+        <div id="tab-bar">
+          <button class="tab active" data-tab="editor">📝 Document</button>
+          <button class="tab" data-tab="whiteboard">🎨 Whiteboard</button>
+          <button class="tab" data-tab="files">📁 Files</button>
+          <button class="tab" data-tab="history">🕐 History</button>
+          <div class="tab-spacer"></div>
+          <span id="editor-status" class="editor-badge offline">Local</span>
+        </div>
+
+        <!-- Tab panels -->
+        <div id="tab-panels">
+          <div id="panel-editor" class="tab-panel active">
+            <div id="editor-container"></div>
+          </div>
+          <div id="panel-whiteboard" class="tab-panel">
+            <div id="whiteboard-container"></div>
+          </div>
+          <div id="panel-files" class="tab-panel">
+            <div id="files-container"></div>
+          </div>
+          <div id="panel-history" class="tab-panel">
+            <div id="history-container"></div>
+          </div>
+        </div>
+
+        <!-- Chat panel -->
+        <div id="chat">
+          <div id="chat-header">
+            <span class="chat-title">💬 Chat</span>
+          </div>
+          <div id="messages"></div>
+          <div id="chat-bar">
+            <input id="chat-input" type="text" placeholder="Type a message…" disabled spellcheck="false" />
+            <button id="send-btn" class="btn primary" disabled>Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Link-join modal (shown when opening a #room link) -->
+    <div id="join-modal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-logo">◈</div>
+        <h2 class="modal-title">Join EchoMesh Room</h2>
+        <p class="modal-room-label">You've been invited to</p>
+        <div class="modal-room-name" id="modal-room-name"></div>
+        <div class="modal-field">
+          <label class="input-label" for="modal-name-input">Your display name</label>
+          <input id="modal-name-input" type="text" placeholder="Enter your name…" spellcheck="false" autofocus />
+        </div>
+        <button id="modal-join-btn" class="btn primary modal-join-btn">Join Room</button>
+        <button id="modal-cancel-btn" class="modal-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>EchoMesh Signaling Test</title>
+    <style>
+        body { font-family: monospace; background: #1a1a2e; color: #0f0; padding: 20px; }
+        #log { white-space: pre-wrap; font-size: 14px; line-height: 1.6; }
+        .pass { color: #0f0; }
+        .fail { color: #f33; }
+        .info { color: #0af; }
+        button { background: #0af; color: #000; border: none; padding: 10px 24px; cursor: pointer; font-size: 16px; margin-bottom: 20px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <h1>EchoMesh Signaling Server Test</h1>
+    <button id="runTest">RUN TEST</button>
+    <div id="log"></div>
+    <script>
+        const log = document.getElementById('log');
+        function print(msg, cls = 'info') {
+            log.innerHTML += `<span class="${cls}">${msg}</span>\n`;
+        }
+
+        document.getElementById('runTest').addEventListener('click', async () => {
+            log.innerHTML = '';
+            print('=== Starting Signaling Server Test ===');
+
+            const ws1Messages = [];
+            const ws2Messages = [];
+
+            // Connect Peer A
+            const ws1 = new WebSocket('ws://localhost:8080/ws');
+            const ws2 = new WebSocket('ws://localhost:8080/ws');
+
+            ws1.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                ws1Messages.push(data);
+                print(`[Peer A recv] ${JSON.stringify(data)}`);
+            };
+
+            ws2.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                ws2Messages.push(data);
+                print(`[Peer B recv] ${JSON.stringify(data)}`);
+            };
+
+            // Wait for connections
+            await Promise.all([
+                new Promise(r => ws1.onopen = r),
+                new Promise(r => ws2.onopen = r),
+            ]);
+            print('Both WebSockets connected', 'pass');
+
+            // Peer A joins
+            ws1.send(JSON.stringify({ type: 'join', room: 'test-room', peer_id: 'peer-A' }));
+            print('[Peer A send] join test-room');
+            await delay(500);
+
+            // Peer B joins
+            ws2.send(JSON.stringify({ type: 'join', room: 'test-room', peer_id: 'peer-B' }));
+            print('[Peer B send] join test-room');
+            await delay(500);
+
+            // Peer A sends offer to Peer B
+            ws1.send(JSON.stringify({ type: 'offer', to: 'peer-B', from: 'peer-A', sdp: 'test-sdp-offer' }));
+            print('[Peer A send] offer to peer-B');
+            await delay(500);
+
+            // Peer B sends answer to Peer A
+            ws2.send(JSON.stringify({ type: 'answer', to: 'peer-A', from: 'peer-B', sdp: 'test-sdp-answer' }));
+            print('[Peer B send] answer to peer-A');
+            await delay(500);
+
+            // Peer B sends ICE to Peer A
+            ws2.send(JSON.stringify({ type: 'ice', to: 'peer-A', from: 'peer-B', candidate: 'test-ice-candidate' }));
+            print('[Peer B send] ice to peer-A');
+            await delay(500);
+
+            // Verify results
+            print('\n=== Verification ===');
+
+            // Check 1: Peer A got empty peer list on join
+            const peerListA = ws1Messages.find(m => m.type === 'peer_list');
+            check('Peer A received peer_list', peerListA && peerListA.peers.length === 0);
+
+            // Check 2: Peer B got peer list with Peer A
+            const peerListB = ws2Messages.find(m => m.type === 'peer_list');
+            check('Peer B received peer_list with [peer-A]', peerListB && peerListB.peers.length === 1 && peerListB.peers[0] === 'peer-A');
+
+            // Check 3: Peer A got peer_joined for Peer B
+            const peerJoined = ws1Messages.find(m => m.type === 'peer_joined');
+            check('Peer A received peer_joined(peer-B)', peerJoined && peerJoined.peer_id === 'peer-B');
+
+            // Check 4: Peer B got the offer
+            const offer = ws2Messages.find(m => m.type === 'offer');
+            check('Peer B received offer from peer-A', offer && offer.from === 'peer-A' && offer.sdp === 'test-sdp-offer');
+
+            // Check 5: Peer A got the answer
+            const answer = ws1Messages.find(m => m.type === 'answer');
+            check('Peer A received answer from peer-B', answer && answer.from === 'peer-B' && answer.sdp === 'test-sdp-answer');
+
+            // Check 6: Peer A got the ICE candidate
+            const ice = ws1Messages.find(m => m.type === 'ice');
+            check('Peer A received ICE from peer-B', ice && ice.from === 'peer-B' && ice.candidate === 'test-ice-candidate');
+
+            // Test disconnect
+            ws2.close();
+            await delay(300);
+            const peerLeft = ws1Messages.find(m => m.type === 'peer_left');
+            check('Peer A received peer_left(peer-B)', peerLeft && peerLeft.peer_id === 'peer-B');
+
+            ws1.close();
+            print('\n=== Test Complete ===', 'pass');
+        });
+
+        function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+        function check(name, result) {
+            if (result) {
+                print(`  ✓ ${name}`, 'pass');
+            } else {
+                print(`  ✗ ${name}`, 'fail');
+            }
+        }
+    </script>
+</body>
+</html>

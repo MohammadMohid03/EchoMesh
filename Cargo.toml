@@ -1,0 +1,17 @@
+[package]
+name = "echomesh"
+version = "0.1.0"
+edition = "2024"
+description = "Local-first, real-time collaborative workspace with P2P WebRTC"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dashmap = "6"
+tower-http = { version = "0.6", features = ["cors"] }
+futures = "0.3"
