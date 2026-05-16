@@ -259,20 +259,29 @@ input:disabled{opacity:.4;cursor:not-allowed}
 .cm-author-highlight{
   border-bottom:2px solid;
   border-radius:2px;
+  box-shadow:inset 0 -1.15em 0 var(--author-color, rgba(253,203,110,.24));
   transition:background-color .2s;
 }
 .cm-author-label{
   display:inline-block;
-  transform:translateY(-8px);
-  margin-right:4px;
-  padding:1px 5px;
+  position:relative;
+  width:0;
+  height:0;
+  overflow:visible;
+  pointer-events:none;
+  vertical-align:baseline;
+}
+.cm-author-label-badge{
+  position:absolute;
+  left:0;
+  bottom:1.15em;
+  padding:1px 6px;
   border-radius:5px;
   color:#fff;
   font-family:var(--font);
   font-size:10px;
   font-weight:700;
   line-height:1.2;
-  vertical-align:top;
   white-space:nowrap;
   box-shadow:0 2px 8px rgba(0,0,0,.25);
 }

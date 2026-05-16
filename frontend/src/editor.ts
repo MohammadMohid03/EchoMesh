@@ -66,11 +66,20 @@ class AuthorLabelWidget extends WidgetType {
   }
 
   toDOM(): HTMLElement {
-    const label = document.createElement('span');
-    label.className = 'cm-author-label';
-    label.textContent = this.name;
-    label.style.backgroundColor = this.color;
-    return label;
+    const wrapper = document.createElement('span');
+    wrapper.className = 'cm-author-label';
+
+    const badge = document.createElement('span');
+    badge.className = 'cm-author-label-badge';
+    badge.textContent = this.name;
+    badge.style.backgroundColor = this.color;
+    wrapper.appendChild(badge);
+
+    return wrapper;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
   }
 }
 
@@ -347,8 +356,35 @@ export class CollabEditor {
     }
 
     this.view.dispatch({
-      effects: setAuthorHighlights.of(rendered),
+      effects: setAuthorHighlights.of(this.mergeAuthorRanges(rendered)),
     });
+  }
+
+  private mergeAuthorRanges(ranges: RenderedAuthorRange[]): RenderedAuthorRange[] {
+    const sorted = [...ranges].sort((a, b) =>
+      a.from - b.from ||
+      a.to - b.to ||
+      a.peerId.localeCompare(b.peerId),
+    );
+    const merged: RenderedAuthorRange[] = [];
+
+    for (const range of sorted) {
+      const previous = merged[merged.length - 1];
+      if (
+        previous &&
+        previous.peerId === range.peerId &&
+        previous.name === range.name &&
+        previous.color === range.color &&
+        range.from <= previous.to + 1
+      ) {
+        previous.to = Math.max(previous.to, range.to);
+        continue;
+      }
+
+      merged.push({ ...range });
+    }
+
+    return merged;
   }
 
   private scheduleAuthorHighlightRender(): void {
