@@ -23,8 +23,7 @@ import { storage } from './storage';
 // ── Sub-message types within Sync ───────────────────────────────────
 const SYNC_DOC = 0;
 const SYNC_AWARENESS = 1;
-const SYNC_AUTHOR_HIGHLIGHT = 2;
-const AUTHOR_HIGHLIGHT_TTL = 3500;
+const AUTHORS_MAP = 'author-ranges';
 
 function generateId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
@@ -36,16 +35,22 @@ interface AuthorRange {
   to: number;
 }
 
-interface AuthorHighlight {
+interface RenderedAuthorRange extends AuthorRange {
   id: string;
   peerId: string;
   name: string;
   color: string;
-  ranges: AuthorRange[];
 }
 
-const addAuthorHighlight = StateEffect.define<AuthorHighlight>();
-const clearAuthorHighlight = StateEffect.define<string>();
+type StoredAuthorRange = {
+  peerId: string;
+  name: string;
+  color: string;
+  start: number[];
+  end: number[];
+};
+
+const setAuthorHighlights = StateEffect.define<RenderedAuthorRange[]>();
 
 class AuthorLabelWidget extends WidgetType {
   private readonly name: string;
@@ -73,51 +78,33 @@ const authorHighlightField = StateField.define<DecorationSet>({
   create() {
     return Decoration.none;
   },
-  update(value, tr) {
-    value = value.map(tr.changes);
-
+  update(value, tr): DecorationSet {
     for (const effect of tr.effects) {
-      if (effect.is(clearAuthorHighlight)) {
-        value = value.update({
-          filter: (_from, _to, deco) => deco.spec.id !== effect.value,
-        });
-      }
-
-      if (effect.is(addAuthorHighlight)) {
-        const highlight = effect.value;
+      if (effect.is(setAuthorHighlights)) {
         const decorations = [];
-        for (const [index, range] of highlight.ranges.entries()) {
-          if (range.to <= range.from) continue;
-
+        for (const range of effect.value) {
           decorations.push(
             Decoration.mark({
               class: 'cm-author-highlight',
               attributes: {
-                style: `background-color:${highlight.color}33;border-bottom-color:${highlight.color};`,
+                style: `--author-color:${range.color};background-color:${range.color}2e;border-bottom-color:${range.color};`,
+                title: `${range.name} wrote this`,
               },
-              id: highlight.id,
             }).range(range.from, range.to),
           );
-
-          if (index === 0) {
-            decorations.push(
-              Decoration.widget({
-                widget: new AuthorLabelWidget(highlight.name, highlight.color),
-                side: -1,
-                id: highlight.id,
-              }).range(range.from),
-            );
-          }
+          decorations.push(
+            Decoration.widget({
+              widget: new AuthorLabelWidget(range.name, range.color),
+              side: -1,
+            }).range(range.from),
+          );
         }
 
-        value = value.update({
-          add: decorations,
-          sort: true,
-        });
+        return Decoration.set(decorations, true);
       }
     }
 
-    return value;
+    return value.map(tr.changes);
   },
   provide: field => EditorView.decorations.from(field),
 });
@@ -138,12 +125,15 @@ export class CollabEditor {
   public view: EditorView | null = null;
 
   private messaging: MessagingLayer;
+  private authorRanges: Y.Map<StoredAuthorRange>;
   private roomName: string;
   private peerId: string;
   private localName: string;
   private localColor: string;
   private docUpdateHandler: (update: Uint8Array, origin: unknown) => void;
   private awarenessUpdateHandler: (changes: { added: number[]; updated: number[]; removed: number[] }) => void;
+  private authorRangesObserver: () => void;
+  private authorRenderTimer: ReturnType<typeof setTimeout> | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
 
@@ -163,6 +153,7 @@ export class CollabEditor {
     // ── Yjs document ─────────────────────────────────────────────
     this.doc = new Y.Doc();
     this.ytext = this.doc.getText('codemirror');
+    this.authorRanges = this.doc.getMap<StoredAuthorRange>(AUTHORS_MAP);
     this.awareness = new Awareness(this.doc);
 
     // Set local awareness state (user cursor info)
@@ -190,6 +181,12 @@ export class CollabEditor {
       }
     };
     this.awareness.on('update', this.awarenessUpdateHandler);
+
+    this.authorRangesObserver = () => {
+      this.scheduleAuthorHighlightRender();
+      this.scheduleSave();
+    };
+    this.authorRanges.observe(this.authorRangesObserver);
 
     // ── Network → Yjs ────────────────────────────────────────────
     this.messaging.on('sync', (_peerId, data) => {
@@ -285,6 +282,7 @@ export class CollabEditor {
     });
 
     this.view = new EditorView({ state, parent: container });
+    this.scheduleAuthorHighlightRender();
   }
 
   private handleEditorUpdate(update: ViewUpdate): void {
@@ -304,13 +302,67 @@ export class CollabEditor {
 
     if (ranges.length === 0) return;
 
-    this.broadcastAuthorHighlight({
-      id: generateId(),
+    for (const range of ranges) {
+      this.storeAuthorRange(range);
+    }
+  }
+
+  private storeAuthorRange(range: AuthorRange): void {
+    const start = Y.createRelativePositionFromTypeIndex(this.ytext, range.from, -1);
+    const end = Y.createRelativePositionFromTypeIndex(this.ytext, range.to, 1);
+
+    this.authorRanges.set(generateId(), {
       peerId: this.peerId,
       name: this.localName,
       color: this.localColor,
-      ranges,
+      start: Array.from(Y.encodeRelativePosition(start)),
+      end: Array.from(Y.encodeRelativePosition(end)),
     });
+  }
+
+  private renderAuthorHighlights(): void {
+    this.authorRenderTimer = null;
+    if (!this.view) return;
+
+    const rendered: RenderedAuthorRange[] = [];
+
+    for (const [id, stored] of this.authorRanges.entries()) {
+      const start = this.decodeAuthorPosition(stored.start);
+      const end = this.decodeAuthorPosition(stored.end);
+      if (!start || !end) continue;
+      if (start.type !== this.ytext || end.type !== this.ytext) continue;
+
+      const from = Math.max(0, Math.min(start.index, this.view.state.doc.length));
+      const to = Math.max(0, Math.min(end.index, this.view.state.doc.length));
+      if (to <= from) continue;
+
+      rendered.push({
+        id,
+        peerId: stored.peerId,
+        name: stored.name,
+        color: stored.color,
+        from,
+        to,
+      });
+    }
+
+    this.view.dispatch({
+      effects: setAuthorHighlights.of(rendered),
+    });
+  }
+
+  private scheduleAuthorHighlightRender(): void {
+    if (this.authorRenderTimer) return;
+    this.authorRenderTimer = setTimeout(() => this.renderAuthorHighlights(), 0);
+  }
+
+  private decodeAuthorPosition(encoded: number[]): Y.AbsolutePosition | null {
+    try {
+      const relative = Y.decodeRelativePosition(Uint8Array.from(encoded));
+      return Y.createAbsolutePositionFromRelativePosition(relative, this.doc);
+    } catch {
+      return null;
+    }
   }
 
   // ── Persistence ───────────────────────────────────────────────────
@@ -348,14 +400,6 @@ export class CollabEditor {
     }));
     const msg = new Uint8Array(1 + encoded.byteLength);
     msg[0] = SYNC_AWARENESS;
-    msg.set(encoded, 1);
-    this.messaging.sendSync(msg);
-  }
-
-  private broadcastAuthorHighlight(highlight: AuthorHighlight): void {
-    const encoded = new TextEncoder().encode(JSON.stringify(highlight));
-    const msg = new Uint8Array(1 + encoded.byteLength);
-    msg[0] = SYNC_AUTHOR_HIGHLIGHT;
     msg.set(encoded, 1);
     this.messaging.sendSync(msg);
   }
@@ -398,35 +442,6 @@ export class CollabEditor {
         }
         break;
       }
-      case SYNC_AUTHOR_HIGHLIGHT: {
-        try {
-          const highlight = JSON.parse(new TextDecoder().decode(payload)) as AuthorHighlight;
-          if (highlight.peerId === this.peerId || !this.view) return;
-
-          const docLength = this.view.state.doc.length;
-          const ranges = highlight.ranges
-            .map(range => ({
-              from: Math.max(0, Math.min(range.from, docLength)),
-              to: Math.max(0, Math.min(range.to, docLength)),
-            }))
-            .filter(range => range.to > range.from);
-
-          if (ranges.length === 0) return;
-
-          this.view.dispatch({
-            effects: addAuthorHighlight.of({ ...highlight, ranges }),
-          });
-
-          setTimeout(() => {
-            this.view?.dispatch({
-              effects: clearAuthorHighlight.of(highlight.id),
-            });
-          }, AUTHOR_HIGHLIGHT_TTL);
-        } catch (e) {
-          console.warn('[Editor] Failed to decode author highlight:', e);
-        }
-        break;
-      }
     }
   }
 
@@ -434,9 +449,11 @@ export class CollabEditor {
   async destroy(): Promise<void> {
     this.destroyed = true;
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    if (this.authorRenderTimer) clearTimeout(this.authorRenderTimer);
     await this.saveNow();
     this.doc.off('update', this.docUpdateHandler);
     this.awareness.off('update', this.awarenessUpdateHandler);
+    this.authorRanges.unobserve(this.authorRangesObserver);
     this.awareness.destroy();
     this.view?.destroy();
     this.doc.destroy();
