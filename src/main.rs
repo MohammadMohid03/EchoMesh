@@ -1,11 +1,6 @@
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-mod room;
-mod server;
-mod types;
-mod ws;
-
 #[tokio::main]
 async fn main() {
     // Initialize structured logging.
@@ -18,17 +13,10 @@ async fn main() {
         )
         .init();
 
-    let room_manager = room::manager::RoomManager::new();
-    let app = server::create_router(room_manager);
-
-    let addr = "0.0.0.0:8080";
-    info!("EchoMesh signaling server listening on {addr}");
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("Failed to bind to address");
-
-    axum::serve(listener, app)
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    let addr = format!("0.0.0.0:{port}");
+    info!(addr = %addr, "Starting EchoMesh signaling server");
+    echomesh::run_signaling_server(&addr)
         .await
         .expect("Server error");
 }

@@ -12,6 +12,8 @@ pub enum ClientMessage {
     Join {
         room: String,
         peer_id: PeerId,
+        password: Option<String>,
+        create: Option<bool>,
     },
 
     /// Forward a WebRTC SDP offer to a specific peer.

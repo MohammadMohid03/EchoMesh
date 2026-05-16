@@ -7,7 +7,7 @@
   <title>EchoMesh</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
 </head>
 <body>
   <div id="app">
@@ -31,6 +31,9 @@
           <span class="label">You</span>
           <span id="peer-id" class="mono">—</span>
         </div>
+        <button id="theme-toggle" class="theme-toggle" title="Toggle light/dark mode">
+          <span class="theme-icon">🌙</span>
+        </button>
       </div>
     </header>
 
@@ -40,6 +43,13 @@
       <aside id="sidebar">
         <section class="card" id="room-card">
           <h2>Join a Room</h2>
+          <div class="secure-room-panel">
+            <div>
+              <strong>Create protected room</strong>
+              <span>Fill your name, room name, and access key, then create the room.</span>
+            </div>
+            <button id="generate-room-btn" class="btn secure">Create Room</button>
+          </div>
           <div class="row">
             <label class="input-label" for="name-input">Your name</label>
             <input id="name-input" type="text" placeholder="Anonymous" spellcheck="false" />
@@ -48,8 +58,17 @@
             <label class="input-label" for="room-input">Room name</label>
             <input id="room-input" type="text" placeholder="my-room" spellcheck="false" />
           </div>
+          <div class="row password-row">
+            <span class="lock-icon" title="Optional room password">🔒</span>
+            <input id="password-input" type="password" placeholder="Access key required" spellcheck="false" />
+          </div>
+          <div class="secure-hint">Peers need the room invite plus the access key. Unknown peers are rejected by the signaling server.</div>
+          <div class="row">
+            <label class="input-label" for="server-input">Signaling server</label>
+            <input id="server-input" type="text" placeholder="Auto / ws://192.168.1.20:8080/ws" spellcheck="false" />
+          </div>
           <div class="row btn-row">
-            <button id="join-btn" class="btn primary">Join</button>
+            <button id="join-btn" class="btn primary">Join Room</button>
             <button id="leave-btn" class="btn danger" disabled>Leave</button>
           </div>
           <div id="status" class="status-badge off">Not connected</div>
@@ -111,6 +130,7 @@
             <span class="chat-title">💬 Chat</span>
           </div>
           <div id="messages"></div>
+          <div id="typing-indicator" class="typing-indicator"></div>
           <div id="chat-bar">
             <input id="chat-input" type="text" placeholder="Type a message…" disabled spellcheck="false" />
             <button id="send-btn" class="btn primary" disabled>Send</button>
@@ -126,9 +146,17 @@
         <h2 class="modal-title">Join EchoMesh Room</h2>
         <p class="modal-room-label">You've been invited to</p>
         <div class="modal-room-name" id="modal-room-name"></div>
+        <div class="modal-field hidden" id="modal-room-field">
+          <label class="input-label" for="modal-room-input">Room name</label>
+          <input id="modal-room-input" type="text" placeholder="Enter room name..." spellcheck="false" />
+        </div>
         <div class="modal-field">
           <label class="input-label" for="modal-name-input">Your display name</label>
           <input id="modal-name-input" type="text" placeholder="Enter your name…" spellcheck="false" autofocus />
+        </div>
+        <div class="modal-field">
+          <label class="input-label" for="modal-password-input">Room password</label>
+          <input id="modal-password-input" type="password" placeholder="Access key" spellcheck="false" />
         </div>
         <button id="modal-join-btn" class="btn primary modal-join-btn">Join Room</button>
         <button id="modal-cancel-btn" class="modal-cancel">Cancel</button>

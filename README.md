@@ -54,6 +54,7 @@ The app includes a collaborative markdown editor, whiteboard, chat, room history
 - Rust toolchain with Cargo
 - Node.js and npm
 - A modern browser with WebRTC support
+- For desktop builds: Tauri system prerequisites for your OS
 
 ## Run Locally
 
@@ -85,6 +86,29 @@ http://localhost:5173
 ```
 
 The Vite dev server proxies `/ws` to the Rust server on port `8080`.
+
+## Run Desktop
+
+Install frontend dependencies, then start the Tauri app:
+
+```bash
+cd frontend
+npm install
+npm run desktop:dev
+```
+
+The desktop app starts an embedded signaling server on `0.0.0.0:8080` and loads the Vite frontend in a Tauri WebView. If another device should join through a specific signaling host, enter a URL like this in the **Signaling server** field:
+
+```text
+ws://192.168.1.20:8080/ws
+```
+
+Build a desktop bundle with:
+
+```bash
+cd frontend
+npm run desktop:build
+```
 
 ## Usage
 
@@ -128,6 +152,7 @@ The server returns existing peers and relays WebRTC offers, answers, and ICE can
 ## Notes
 
 - The backend currently provides signaling only; it does not store documents or files.
+- Desktop mode embeds the same signaling server; file payloads still move peer-to-peer over WebRTC DataChannels.
 - Local document state is stored in each browser using IndexedDB.
 - The default CORS configuration is permissive for development and should be restricted before production deployment.
 - WebRTC connectivity may require TURN servers for users behind restrictive NATs or firewalls.

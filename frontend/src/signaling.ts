@@ -25,11 +25,16 @@ export class SignalingClient {
   private url: string;
   private peerId: string;
   private roomId = '';
+  private roomPassword = '';
   private listeners: Partial<{
     [K in keyof SignalingEventMap]: SignalingEventMap[K][];
   }> = {};
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldReconnect = true;
+  private pendingJoin: {
+    resolve: () => void;
+    reject: (error: Error) => void;
+  } | null = null;
 
   constructor(url: string, peerId: string) {
     this.url = url;
@@ -85,6 +90,8 @@ export class SignalingClient {
       switch (msg.type) {
         case 'peer_list':
           this.emit('peer_list', msg.peers);
+          this.pendingJoin?.resolve();
+          this.pendingJoin = null;
           break;
         case 'peer_joined':
           this.emit('peer_joined', msg.peer_id);
@@ -104,6 +111,8 @@ export class SignalingClient {
         case 'error':
           console.error('[Signaling] Server error:', msg.message);
           this.emit('error', msg.message);
+          this.pendingJoin?.reject(new Error(msg.message));
+          this.pendingJoin = null;
           break;
       }
     } catch (e) {
@@ -112,9 +121,19 @@ export class SignalingClient {
   }
 
   /** Join a named room. Must be called after connect(). */
-  joinRoom(roomId: string): void {
+  joinRoom(roomId: string, password = '', create = false): Promise<void> {
     this.roomId = roomId;
-    this.send({ type: 'join', room: roomId, peer_id: this.peerId });
+    this.roomPassword = password;
+    return new Promise((resolve, reject) => {
+      this.pendingJoin = { resolve, reject };
+      this.send({
+        type: 'join',
+        room: roomId,
+        peer_id: this.peerId,
+        password: this.roomPassword.trim() || null,
+        create,
+      });
+    });
   }
 
   sendOffer(to: string, sdp: string): void {
@@ -141,7 +160,7 @@ export class SignalingClient {
       this.reconnectTimer = null;
       try {
         await this.connect();
-        if (this.roomId) this.joinRoom(this.roomId);
+        if (this.roomId) void this.joinRoom(this.roomId, this.roomPassword);
       } catch {
         this.scheduleReconnect();
       }

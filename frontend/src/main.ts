@@ -11,9 +11,13 @@ import { colorForPeer, type AwarenessState } from './types';
 import './style.css';
 
 // ── Local identity ──────────────────────────────────────────────────
-const peerId = 'peer-' + crypto.randomUUID().slice(0, 8);
+function generateId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID().slice(0, 8);
+  return Math.random().toString(36).substring(2, 10);
+}
+
+const peerId = 'peer-' + generateId();
 const peerColor = colorForPeer(peerId);
-const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
 
 let signaling: SignalingClient;
 let peerManager: PeerManager;
@@ -28,6 +32,9 @@ let currentRoom: string | null = null;
 const $ = (id: string) => document.getElementById(id)!;
 const nameInput = $('name-input') as HTMLInputElement;
 const roomInput = $('room-input') as HTMLInputElement;
+const passwordInput = $('password-input') as HTMLInputElement;
+const serverInput = $('server-input') as HTMLInputElement;
+const generateRoomBtn = $('generate-room-btn') as HTMLButtonElement;
 const joinBtn = $('join-btn') as HTMLButtonElement;
 const leaveBtn = $('leave-btn') as HTMLButtonElement;
 const statusEl = $('status');
@@ -44,13 +51,133 @@ const historyContainer = $('history-container');
 const editorStatusEl = $('editor-status');
 const roomHistoryEl = $('room-history');
 const offlineBanner = $('offline-banner');
+const typingIndicatorEl = $('typing-indicator');
+const themeToggle = $('theme-toggle') as HTMLButtonElement;
+const themeIcon = themeToggle.querySelector('.theme-icon') as HTMLElement;
 
 peerIdEl.textContent = peerId;
 peerIdEl.style.color = peerColor;
 
-// Restore name from localStorage
+type JoinAction = 'create' | 'join';
+
+function getSignalingUrl(): string {
+  const configured = normalizeSignalingUrl(serverInput.value);
+  if (configured) return configured;
+
+  const hostedDefault = normalizeSignalingUrl(import.meta.env.VITE_SIGNALING_URL ?? '');
+  if (hostedDefault) return hostedDefault;
+
+  const desktopHost = isTauriHost();
+  if (desktopHost) return 'ws://127.0.0.1:8080/ws';
+
+  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.hostname}:8080/ws`;
+}
+
+function normalizeSignalingUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) return trimmed;
+  if (trimmed.startsWith('http://')) return `ws://${trimmed.slice('http://'.length)}`;
+  if (trimmed.startsWith('https://')) return `wss://${trimmed.slice('https://'.length)}`;
+  const withoutTrailingSlash = trimmed.replace(/\/$/, '');
+  return `ws://${withoutTrailingSlash}${withoutTrailingSlash.endsWith('/ws') ? '' : '/ws'}`;
+}
+
+function isTauriHost(): boolean {
+  return location.hostname === 'tauri.localhost' || location.protocol === 'tauri:';
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '0.0.0.0' ||
+    hostname === '::1' ||
+    hostname === '[::1]';
+}
+
+function getInviteBaseUrl(signalUrl: string): string {
+  const hostedWebUrl = normalizeWebAppUrl(import.meta.env.VITE_WEB_APP_URL ?? '');
+  if (hostedWebUrl) return hostedWebUrl;
+
+  if (!isTauriHost()) return `${location.origin}${location.pathname}`;
+
+  try {
+    const signal = new URL(signalUrl);
+    if (!isLoopbackHost(signal.hostname)) {
+      const webProtocol = signal.protocol === 'wss:' ? 'https:' : 'http:';
+      return `${webProtocol}//${signal.hostname}:5173/`;
+    }
+  } catch { /* fall back to current app URL */ }
+
+  return `${location.origin}${location.pathname}`;
+}
+
+function normalizeWebAppUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(withProtocol);
+    const path = url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`;
+    return `${url.origin}${path}`;
+  } catch {
+    return '';
+  }
+}
+
+type InviteData = {
+  room: string;
+  signal: string;
+  action?: JoinAction;
+};
+
+async function createRoom(): Promise<void> {
+  await joinRoom('create');
+}
+
+function buildInviteHash(room: string, signal = ''): string {
+  const params = new URLSearchParams({ room });
+  if (signal) params.set('signal', signal);
+  return params.toString();
+}
+
+function parseInviteHash(): InviteData | null {
+  const raw = location.hash.slice(1);
+  if (!raw) return null;
+
+  const params = new URLSearchParams(raw);
+  const room = params.get('room');
+  if (room) {
+    return {
+      room,
+      signal: params.get('signal') ?? '',
+    };
+  }
+
+  return {
+    room: decodeURIComponent(raw),
+    signal: '',
+  };
+}
+
+// Restore preferences from localStorage
 const savedName = localStorage.getItem('echomesh-name');
 if (savedName) nameInput.value = savedName;
+const savedSignalingUrl = localStorage.getItem('echomesh-signaling-url');
+if (savedSignalingUrl) serverInput.value = savedSignalingUrl;
+
+// Theme preference
+const savedTheme = localStorage.getItem('echomesh-theme') || 'dark';
+document.documentElement.dataset.theme = savedTheme;
+themeIcon.textContent = savedTheme === 'light' ? '☀️' : '🌙';
+
+themeToggle.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('echomesh-theme', next);
+  themeIcon.textContent = next === 'light' ? '☀️' : '🌙';
+});
 
 // ── Tab switching ───────────────────────────────────────────────────
 
@@ -185,6 +312,38 @@ function refreshPeers() {
   }
 }
 
+function refreshTypingIndicator() {
+  if (!messaging) {
+    typingIndicatorEl.textContent = '';
+    return;
+  }
+
+  const names = [...messaging.awareness.values()]
+    .filter(state => state.typingChat)
+    .map(state => state.name)
+    .slice(0, 3);
+
+  if (names.length === 0) {
+    typingIndicatorEl.textContent = '';
+  } else {
+    typingIndicatorEl.textContent =
+      names.length === 1 ? `${names[0]} is typing` : `${names.join(', ')} are typing`;
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement('span');
+      dot.className = 'typing-dot';
+      dot.textContent = '.';
+      typingIndicatorEl.appendChild(dot);
+    }
+  }
+}
+
+let chatTypingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function setChatTyping(isTyping: boolean) {
+  if (!messaging) return;
+  messaging.updateLocalAwareness({ typingChat: isTyping });
+}
+
 // ── Room history ────────────────────────────────────────────────────
 
 async function renderRoomHistory() {
@@ -212,7 +371,11 @@ async function renderRoomHistory() {
   roomHistoryEl.querySelectorAll('.history-join').forEach(btn => {
     btn.addEventListener('click', () => {
       roomInput.value = (btn as HTMLElement).dataset.room!;
-      joinRoom();
+      showJoinModal({
+        room: roomInput.value,
+        signal: normalizeSignalingUrl(serverInput.value),
+        action: 'create',
+      });
     });
   });
 
@@ -240,23 +403,51 @@ function timeAgo(iso: string): string {
 
 // ── Join / Leave ────────────────────────────────────────────────────
 
-async function joinRoom() {
+function markInvalid(input: HTMLInputElement): void {
+  input.focus();
+  input.classList.add('input-shake');
+  setTimeout(() => input.classList.remove('input-shake'), 450);
+}
+
+async function joinRoom(action: JoinAction = 'join') {
   const room = roomInput.value.trim();
-  if (!room) return;
-  const userName = nameInput.value.trim() || peerId;
+  const userName = nameInput.value.trim();
+  const roomPassword = passwordInput.value.trim();
+  if (!userName) {
+    setStatus('Your name is required', 'off');
+    markInvalid(nameInput);
+    return;
+  }
+  if (!room) {
+    setStatus('Room name is required', 'off');
+    markInvalid(roomInput);
+    return;
+  }
+  if (!roomPassword) {
+    setStatus('Access key required', 'off');
+    markInvalid(passwordInput);
+    return;
+  }
   currentRoom = room;
-  location.hash = room;
+  location.hash = buildInviteHash(room, getSignalingUrl());
 
   localStorage.setItem('echomesh-name', userName);
+  const configuredSignalingUrl = normalizeSignalingUrl(serverInput.value);
+  if (configuredSignalingUrl) {
+    localStorage.setItem('echomesh-signaling-url', configuredSignalingUrl);
+    serverInput.value = configuredSignalingUrl;
+  } else {
+    localStorage.removeItem('echomesh-signaling-url');
+  }
   await storage.addRoom({
     name: room,
     userName,
     lastJoined: new Date().toISOString(),
   });
 
-  setStatus('Connecting…', 'wait');
+  setStatus(action === 'create' ? 'Creating room...' : 'Joining room...', 'wait');
 
-  signaling = new SignalingClient(wsUrl, peerId);
+  signaling = new SignalingClient(getSignalingUrl(), peerId);
   peerManager = new PeerManager(peerId);
   messaging = new MessagingLayer(peerManager, userName, peerColor);
 
@@ -302,6 +493,10 @@ async function joinRoom() {
     setStatus('Disconnected — editing locally', 'off');
     setEditorStatus(false);
   });
+  signaling.on('error', (message) => {
+    systemMsg(message);
+    setStatus(message, 'off');
+  });
 
   // ── WebRTC → Signaling ──────────────────────────────────────────
   peerManager.onSendOffer = (to, sdp) => signaling.sendOffer(to, sdp);
@@ -328,27 +523,47 @@ async function joinRoom() {
     const color = state?.color || colorForPeer(from);
     addMsg(name, msg.text, color);
   });
-  messaging.on('awareness', () => refreshPeers());
+  messaging.on('awareness', () => {
+    refreshPeers();
+    refreshTypingIndicator();
+  });
   messaging.startAwareness(5000);
 
   // ── Connect ────────────────────────────────────────────────────
   try {
     await signaling.connect();
-    signaling.joinRoom(room);
+    await signaling.joinRoom(room, roomPassword, action === 'create');
     setStatus(`Room: ${room}`, 'wait');
     joinBtn.disabled = true;
     leaveBtn.disabled = false;
+    generateRoomBtn.disabled = true;
     roomInput.disabled = true;
     nameInput.disabled = true;
+    passwordInput.disabled = true;
+    serverInput.disabled = true;
     chatInput.disabled = false;
     sendBtn.disabled = false;
     chatInput.focus();
     systemMsg(`You joined room "${room}" as ${userName}`);
     renderRoomHistory();
     addCopyLinkButton();
-  } catch {
-    setStatus('Connection failed — editing locally', 'off');
-    systemMsg('Failed to connect. You can edit offline.');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Connection failed';
+    setStatus(`${message} — editing locally`, 'off');
+    systemMsg(`${message}. You can edit offline.`);
+    historyMgr?.destroy();
+    fileSharer?.destroy();
+    whiteboard?.destroy();
+    await editor?.destroy();
+    messaging?.destroy();
+    signaling?.disconnect();
+    currentRoom = null;
+    location.hash = '';
+    editorContainer.innerHTML = '';
+    whiteboardContainer.innerHTML = '';
+    filesContainer.innerHTML = '';
+    historyContainer.innerHTML = '';
+    return;
   }
 }
 
@@ -373,10 +588,14 @@ async function leaveRoom() {
   peerCountEl.textContent = '0';
   joinBtn.disabled = false;
   leaveBtn.disabled = true;
+  generateRoomBtn.disabled = false;
   roomInput.disabled = false;
   nameInput.disabled = false;
+  passwordInput.disabled = false;
+  serverInput.disabled = false;
   chatInput.disabled = true;
   sendBtn.disabled = true;
+  typingIndicatorEl.textContent = '';
   renderRoomHistory();
   // Remove copy-link button
   const copyBtn = document.querySelector('.copy-link-btn');
@@ -387,6 +606,8 @@ function sendChat() {
   const text = chatInput.value.trim();
   if (!text || !messaging) return;
   messaging.sendChat(text);
+  setChatTyping(false);
+  if (chatTypingTimer) clearTimeout(chatTypingTimer);
   const name = nameInput.value.trim() || peerId;
   addMsg(name, text, peerColor, true);
   chatInput.value = '';
@@ -422,11 +643,36 @@ $('export-png').addEventListener('click', () => {
 });
 
 // ── Event bindings ──────────────────────────────────────────────────
-joinBtn.addEventListener('click', joinRoom);
+generateRoomBtn.addEventListener('click', () => void createRoom());
+joinBtn.addEventListener('click', () => {
+  showJoinModal({
+    room: roomInput.value.trim(),
+    signal: normalizeSignalingUrl(serverInput.value),
+  });
+});
 leaveBtn.addEventListener('click', leaveRoom);
 sendBtn.addEventListener('click', sendChat);
 chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
-roomInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(); });
+chatInput.addEventListener('input', () => {
+  if (!messaging) return;
+  const isTyping = chatInput.value.trim().length > 0;
+  setChatTyping(isTyping);
+  if (chatTypingTimer) clearTimeout(chatTypingTimer);
+  if (isTyping) {
+    chatTypingTimer = setTimeout(() => setChatTyping(false), 1800);
+  }
+});
+roomInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    showJoinModal({ room: roomInput.value.trim(), signal: normalizeSignalingUrl(serverInput.value) });
+  }
+});
+passwordInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') void createRoom(); });
+serverInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    showJoinModal({ room: roomInput.value.trim(), signal: normalizeSignalingUrl(serverInput.value) });
+  }
+});
 
 // ── Save before unload ──────────────────────────────────────────────
 window.addEventListener('beforeunload', () => {
@@ -437,40 +683,78 @@ window.addEventListener('beforeunload', () => {
 
 const joinModal = $('join-modal');
 const modalRoomName = $('modal-room-name');
+const modalRoomLabel = joinModal.querySelector('.modal-room-label') as HTMLElement;
+const modalRoomField = $('modal-room-field');
+const modalRoomInput = $('modal-room-input') as HTMLInputElement;
 const modalNameInput = $('modal-name-input') as HTMLInputElement;
+const modalPasswordInput = $('modal-password-input') as HTMLInputElement;
 const modalJoinBtn = $('modal-join-btn') as HTMLButtonElement;
 const modalCancelBtn = $('modal-cancel-btn') as HTMLButtonElement;
+let pendingJoinInvite: InviteData | null = null;
 
-function showJoinModal(room: string) {
-  modalRoomName.textContent = room;
+function showJoinModal(invite: InviteData) {
+  pendingJoinInvite = invite;
+  const room = invite.room.trim();
+  modalRoomLabel.textContent = invite.action === 'create'
+    ? 'Reopening local room'
+    : room ? 'Joining room' : 'Choose a room';
+  modalRoomName.textContent = room || 'Room details';
+  modalRoomInput.value = room;
+  modalRoomField.classList.toggle('hidden', Boolean(room));
   // Pre-fill saved name
   const saved = localStorage.getItem('echomesh-name');
   if (saved) modalNameInput.value = saved;
+  modalPasswordInput.value = '';
+  if (invite.signal) serverInput.value = invite.signal;
   joinModal.classList.remove('hidden');
-  modalNameInput.focus();
+  (room ? (modalNameInput.value ? modalPasswordInput : modalNameInput) : modalRoomInput).focus();
 }
 
 function hideJoinModal() {
   joinModal.classList.add('hidden');
+  pendingJoinInvite = null;
 }
 
 modalJoinBtn.addEventListener('click', () => {
-  const hash = location.hash.slice(1);
-  if (!hash) return;
+  const invite = pendingJoinInvite ?? parseInviteHash();
+  if (!invite) return;
+  const room = (invite.room || modalRoomInput.value).trim();
   const name = modalNameInput.value.trim();
+  const password = modalPasswordInput.value.trim();
+  if (!room) {
+    modalRoomField.classList.remove('hidden');
+    modalRoomInput.focus();
+    modalRoomInput.style.borderColor = 'var(--red)';
+    setTimeout(() => modalRoomInput.style.borderColor = '', 1500);
+    return;
+  }
   if (!name) {
     modalNameInput.focus();
     modalNameInput.style.borderColor = 'var(--red)';
     setTimeout(() => modalNameInput.style.borderColor = '', 1500);
     return;
   }
+  if (!password) {
+    modalPasswordInput.focus();
+    modalPasswordInput.style.borderColor = 'var(--red)';
+    setTimeout(() => modalPasswordInput.style.borderColor = '', 1500);
+    return;
+  }
   nameInput.value = name;
-  roomInput.value = hash;
+  passwordInput.value = password;
+  roomInput.value = room;
+  if (invite.signal) serverInput.value = invite.signal;
   hideJoinModal();
-  joinRoom();
+  joinRoom(invite.action ?? 'join');
 });
 
 modalNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') modalJoinBtn.click();
+});
+modalPasswordInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') modalJoinBtn.click();
+});
+modalRoomInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') modalJoinBtn.click();
 });
 
@@ -487,12 +771,17 @@ function addCopyLinkButton() {
   if (existing) existing.remove();
 
   if (!currentRoom) return;
+  const room = currentRoom;
 
   const btn = document.createElement('button');
   btn.className = 'copy-link-btn';
+  btn.textContent = 'Copy secure invite';
   btn.innerHTML = '🔗 Copy invite link';
+  btn.textContent = 'Copy secure invite';
   btn.addEventListener('click', async () => {
-    const url = `${location.origin}${location.pathname}#${currentRoom}`;
+    const signal = getSignalingUrl();
+    const hash = buildInviteHash(room, signal);
+    const url = `${getInviteBaseUrl(signal)}#${hash}`;
     try {
       await navigator.clipboard.writeText(url);
       btn.innerHTML = '✅ Link copied!';
@@ -500,6 +789,7 @@ function addCopyLinkButton() {
       setTimeout(() => {
         btn.innerHTML = '🔗 Copy invite link';
         btn.classList.remove('copied');
+        btn.textContent = 'Copy secure invite';
       }, 2000);
     } catch {
       // Fallback: select and copy
@@ -514,6 +804,7 @@ function addCopyLinkButton() {
       setTimeout(() => {
         btn.innerHTML = '🔗 Copy invite link';
         btn.classList.remove('copied');
+        btn.textContent = 'Copy secure invite';
       }, 2000);
     }
   });
@@ -524,10 +815,10 @@ function addCopyLinkButton() {
 }
 
 // ── Auto-show join modal from URL hash ──────────────────────────────
-const hash = location.hash.slice(1);
-if (hash) {
+const invite = parseInviteHash();
+if (invite) {
   // Someone opened an invite link — show the join modal
-  showJoinModal(hash);
+  showJoinModal(invite);
 }
 
 // ── Init ────────────────────────────────────────────────────────────

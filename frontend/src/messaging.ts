@@ -114,9 +114,16 @@ export class MessagingLayer {
     };
 
     // Listen for raw DataChannel messages and decode them
-    this.pm.on('message', (peerId, data) => {
+    this.pm.on('message', async (peerId, data) => {
+      let buffer: ArrayBuffer | null = null;
       if (data instanceof ArrayBuffer) {
-        const msg = decode(data);
+        buffer = data;
+      } else if ((data as any) instanceof Blob) {
+        buffer = await (data as any).arrayBuffer();
+      }
+
+      if (buffer) {
+        const msg = decode(buffer);
         if (!msg) return;
 
         switch (msg.type) {
@@ -178,6 +185,7 @@ export class MessagingLayer {
   sendChat(text: string): void {
     const payload: ChatPayload = { text, ts: new Date().toISOString() };
     this.pm.broadcast(encode(MsgType.Chat, payload));
+    this.updateLocalAwareness({ typingChat: false });
   }
 
   // ── Awareness ───────────────────────────────────────────────────────
@@ -192,6 +200,16 @@ export class MessagingLayer {
   broadcastAwareness(): void {
     this.localAwareness.lastActive = new Date().toISOString();
     this.pm.broadcast(encode(MsgType.Awareness, this.localAwareness));
+  }
+
+  /** Merge awareness changes and broadcast them immediately. */
+  updateLocalAwareness(partial: Partial<AwarenessState>): void {
+    this.localAwareness = {
+      ...this.localAwareness,
+      ...partial,
+      lastActive: new Date().toISOString(),
+    };
+    this.broadcastAwareness();
   }
 
   /** Start periodic awareness broadcasts (heartbeat). */
@@ -225,14 +243,24 @@ export class MessagingLayer {
 
   // ── File (for file sharing — Phase 6) ──────────────────────────────
 
-  /** Broadcast a file chunk/meta to all peers. */
-  sendFile(data: Uint8Array): void {
-    this.pm.broadcast(encode(MsgType.File, data));
+  /** Broadcast a file chunk/meta to all peers. Returns peer IDs that accepted it. */
+  sendFile(data: Uint8Array, lane = 0): string[] {
+    return this.pm.broadcastFile(encode(MsgType.File, data), lane);
   }
 
-  /** Send a file chunk/meta to a specific peer. */
-  sendFileTo(peerId: string, data: Uint8Array): void {
-    this.pm.sendTo(peerId, encode(MsgType.File, data));
+  /** Broadcast an already encoded file packet. */
+  sendPreparedFile(packet: ArrayBuffer, lane = 0): string[] {
+    return this.pm.broadcastFile(packet, lane);
+  }
+
+  /** Send a file chunk/meta to a specific peer. Returns false if the channel is not open. */
+  sendFileTo(peerId: string, data: Uint8Array, lane = 0): boolean {
+    return this.pm.sendFileTo(peerId, encode(MsgType.File, data), lane);
+  }
+
+  /** Send an already encoded file packet to a specific peer. */
+  sendPreparedFileTo(peerId: string, packet: ArrayBuffer, lane = 0): boolean {
+    return this.pm.sendFileTo(peerId, packet, lane);
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────

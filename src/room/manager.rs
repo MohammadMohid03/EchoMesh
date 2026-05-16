@@ -1,6 +1,8 @@
 use crate::types::{PeerId, RoomId};
 use crate::ws::messages::ServerMessage;
 use dashmap::DashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -22,12 +24,22 @@ pub type PeerReceiver = mpsc::Receiver<ServerMessage>;
 pub struct RoomManager {
     /// room_id → { peer_id → sender_channel }
     rooms: Arc<DashMap<RoomId, DashMap<PeerId, PeerSender>>>,
+    /// room_id -> password hash. None means the room is open.
+    room_passwords: Arc<DashMap<RoomId, Option<u64>>>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum JoinError {
+    MissingPassword,
+    InvalidPassword,
+    RoomNotFound,
 }
 
 impl RoomManager {
     pub fn new() -> Self {
         Self {
             rooms: Arc::new(DashMap::new()),
+            room_passwords: Arc::new(DashMap::new()),
         }
     }
 
@@ -35,7 +47,15 @@ impl RoomManager {
     ///
     /// Returns the receiver end of the peer's message channel and
     /// a list of peers already in the room.
-    pub fn join_room(&self, room_id: &RoomId, peer_id: &PeerId) -> (PeerReceiver, Vec<PeerId>) {
+    pub fn join_room(
+        &self,
+        room_id: &RoomId,
+        peer_id: &PeerId,
+        password: Option<&str>,
+        create: bool,
+    ) -> Result<(PeerReceiver, Vec<PeerId>), JoinError> {
+        self.ensure_password(room_id, password, create)?;
+
         let (tx, rx) = mpsc::channel(PEER_CHANNEL_CAPACITY);
 
         // Ensure the room exists (creates if needed, then drops the write lock)
@@ -62,7 +82,7 @@ impl RoomManager {
             "Peer joined room"
         );
 
-        (rx, existing_peers)
+        Ok((rx, existing_peers))
     }
 
     /// Remove a peer from a room. Cleans up empty rooms automatically.
@@ -76,9 +96,37 @@ impl RoomManager {
             if remaining == 0 {
                 drop(room); // Release DashMap ref before removing entry
                 self.rooms.remove(room_id);
+                self.room_passwords.remove(room_id);
                 info!(room = %room_id, "Room removed (empty)");
             }
         }
+    }
+
+    fn ensure_password(
+        &self,
+        room_id: &RoomId,
+        password: Option<&str>,
+        create: bool,
+    ) -> Result<(), JoinError> {
+        let incoming = normalize_password(password);
+        if incoming.is_none() {
+            return Err(JoinError::MissingPassword);
+        }
+
+        if let Some(stored) = self.room_passwords.get(room_id) {
+            return if *stored == incoming {
+                Ok(())
+            } else {
+                Err(JoinError::InvalidPassword)
+            };
+        }
+
+        if !create {
+            return Err(JoinError::RoomNotFound);
+        }
+
+        self.room_passwords.insert(room_id.clone(), incoming);
+        Ok(())
     }
 
     /// Send a message to a specific peer in a room.
@@ -129,4 +177,15 @@ impl RoomManager {
             }
         }
     }
+}
+
+fn normalize_password(password: Option<&str>) -> Option<u64> {
+    let trimmed = password?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut hasher = DefaultHasher::new();
+    trimmed.hash(&mut hasher);
+    Some(hasher.finish())
 }

@@ -71,6 +71,7 @@ export type MsgTypeValue = (typeof MsgType)[keyof typeof MsgType];
 export interface AwarenessState {
   name: string;
   color: string;
+  typingChat?: boolean;
   /** ISO timestamp of last activity */
   lastActive: string;
 }
@@ -97,4 +98,3 @@ export function colorForPeer(peerId: string): string {
   }
   return USER_COLORS[Math.abs(hash) % USER_COLORS.length];
 }
-

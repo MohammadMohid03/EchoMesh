@@ -1,0 +1,18 @@
+[package]
+name = "echomesh-desktop"
+version = "0.1.0"
+description = "EchoMesh desktop app"
+authors = ["EchoMesh"]
+edition = "2021"
+
+[lib]
+name = "echomesh_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+echomesh = { path = "../.." }
+tauri = { version = "2", features = [] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

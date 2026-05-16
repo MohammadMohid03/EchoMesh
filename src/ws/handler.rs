@@ -4,7 +4,7 @@ use axum::response::IntoResponse;
 use futures::{SinkExt, StreamExt};
 use tracing::{info, warn};
 
-use crate::room::manager::RoomManager;
+use crate::room::manager::{JoinError, RoomManager};
 use crate::types::{PeerId, RoomId};
 use crate::ws::messages::{ClientMessage, ServerMessage};
 
@@ -31,10 +31,49 @@ async fn handle_connection(socket: WebSocket, room_manager: RoomManager) {
         match ws_receiver.next().await {
             Some(Ok(Message::Text(text))) => {
                 match serde_json::from_str::<ClientMessage>(&text) {
-                    Ok(ClientMessage::Join { room, peer_id }) => {
+                    Ok(ClientMessage::Join {
+                        room,
+                        peer_id,
+                        password,
+                        create,
+                    }) => {
                         let room_id = RoomId(room);
                         let (rx, existing_peers) =
-                            room_manager.join_room(&room_id, &peer_id);
+                            match room_manager.join_room(
+                                &room_id,
+                                &peer_id,
+                                password.as_deref(),
+                                create.unwrap_or(false),
+                            ) {
+                                Ok(joined) => joined,
+                                Err(JoinError::MissingPassword) => {
+                                    let err = ServerMessage::Error {
+                                        message: "Room access key is required".into(),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&err) {
+                                        let _ = ws_sender.send(Message::Text(json.into())).await;
+                                    }
+                                    return;
+                                }
+                                Err(JoinError::InvalidPassword) => {
+                                    let err = ServerMessage::Error {
+                                        message: "Invalid room access key".into(),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&err) {
+                                        let _ = ws_sender.send(Message::Text(json.into())).await;
+                                    }
+                                    return;
+                                }
+                                Err(JoinError::RoomNotFound) => {
+                                    let err = ServerMessage::Error {
+                                        message: "Room not found. Ask the host to create it first.".into(),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&err) {
+                                        let _ = ws_sender.send(Message::Text(json.into())).await;
+                                    }
+                                    return;
+                                }
+                            };
 
                         // Tell the new peer who's already in the room
                         let peer_list = ServerMessage::PeerList {

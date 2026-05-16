@@ -1,3 +1,8 @@
-/target
+target/
 frontend/node_modules/
 frontend/dist/
+frontend/src-tauri/target/
+.env
+frontend/.env
+frontend/.env.local
+temp.txt
