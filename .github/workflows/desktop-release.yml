@@ -1,0 +1,85 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-desktop:
+    name: Build desktop (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: "--bundles nsis,msi"
+          - platform: ubuntu-22.04
+            args: "--bundles appimage,deb,rpm"
+
+    env:
+      VITE_SIGNALING_URL: ${{ vars.VITE_SIGNALING_URL }}
+      VITE_WEB_APP_URL: ${{ vars.VITE_WEB_APP_URL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Tauri dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf rpm libfuse2 file
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust builds
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            frontend/src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build and publish desktop bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_SIGNALING_URL: ${{ env.VITE_SIGNALING_URL }}
+          VITE_WEB_APP_URL: ${{ env.VITE_WEB_APP_URL }}
+        with:
+          projectPath: frontend
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'desktop-v__VERSION__' }}
+          releaseName: "EchoMesh ${{ github.ref_type == 'tag' && github.ref_name || 'Desktop v__VERSION__' }}"
+          releaseBody: |
+            Download the installer for your operating system below.
+
+            Windows:
+            - `.msi` installer
+            - `.exe` setup installer
+
+            Linux:
+            - `.AppImage`
+            - `.deb`
+            - `.rpm`
+          releaseDraft: false
+          prerelease: false
+          releaseAssetNamePattern: "EchoMesh-[version]-[platform]-[arch]-[bundle][setup][ext]"
